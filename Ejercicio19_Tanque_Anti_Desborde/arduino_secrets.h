@@ -6,5 +6,5 @@
 // No suba este archivo a repositorios publicos ni lo envie por correo con
 // la clave real: guarde una copia con datos de ejemplo.
 // ============================================================================
-#define SECRET_SSID "FAM ALEMAN LEYTON"
-#define SECRET_PASS "daam_aleman"
+#define SECRET_SSID "NOMBRE_DE_LA_RED"
+#define SECRET_PASS "CLAVE_DE_LA_RED"
