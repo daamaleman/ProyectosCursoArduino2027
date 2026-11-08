@@ -509,3 +509,234 @@ void enviarPagina(WiFiClient& cliente) {
   cliente.println("border-radius:8px;background:#007A86;color:#fff;");
   cliente.println("text-decoration:none;font-weight:bold}");
   cliente.println("p{font-size:13px;color:#7F8184}");
+  cliente.println("</style></head><body>");
+  cliente.println("<h1>Parqueo inteligente</h1>");
+  cliente.println("<p>Arduino UNO R4 WiFi - Curso Arduino UAM</p>");
+
+  // Cupos libres.
+  cliente.print("<div class=\"tarjeta");
+  if (cuposLibres() <= 0) {
+    cliente.print(" lleno");
+  }
+  cliente.print("\"><h2>Cupos libres</h2><div class=\"valor\">");
+  if (cuposLibres() <= 0) {
+    cliente.print("LLENO");
+  } else {
+    cliente.print(cuposLibres());
+    cliente.print(" de ");
+    cliente.print(CAPACIDAD);
+  }
+  cliente.println("</div></div>");
+
+  // Barrera.
+  cliente.print("<div class=\"tarjeta\"><h2>Barrera</h2><div class=\"valor chico\">");
+  cliente.print(textoBarrera());
+  cliente.println("</div>");
+  cliente.println("<a class=\"boton\" href=\"/abrir\">Abrir barrera</a></div>");
+
+  // Contadores.
+  cliente.print("<div class=\"tarjeta\"><h2>Movimientos desde el arranque</h2>");
+  cliente.print("<div class=\"chico\">Entradas: ");
+  cliente.print((unsigned long)entradas);
+  cliente.print(" | Salidas: ");
+  cliente.print((unsigned long)salidas);
+  cliente.println("</div></div>");
+
+  // Ultimo evento.
+  cliente.print("<div class=\"tarjeta\"><h2>Ultimo evento</h2>");
+  cliente.print("<div class=\"chico\">");
+  cliente.print(ultimoEvento);
+  cliente.print("</div><div>hace ");
+  cliente.print((unsigned long)((millis() - tiempoUltimoEvento) / 1000UL));
+  cliente.println(" s</div></div>");
+
+  cliente.print("<p>Se actualiza sola cada ");
+  cliente.print(SEGUNDOS_RECARGA);
+  cliente.println(" s. El boton abre la barrera sin contar vehiculos. ");
+  cliente.println("Sin usuario ni clave: use solo la red del curso.</p>");
+  cliente.println("</body></html>");
+}
+
+// Responde con una redireccion (303) a la pagina principal.
+void enviarRedireccion(WiFiClient& cliente) {
+  cliente.println("HTTP/1.1 303 See Other");
+  cliente.println("Location: /");
+  cliente.println("Connection: close");
+  cliente.println();
+}
+
+void enviarNoEncontrada(WiFiClient& cliente) {
+  cliente.println("HTTP/1.1 404 Not Found");
+  cliente.println("Content-Type: text/plain");
+  cliente.println("Connection: close");
+  cliente.println();
+  cliente.println("Ruta no encontrada");
+}
+
+// Atiende a un cliente: lee la peticion y responde.
+void atenderCliente(WiFiClient& cliente) {
+  String primeraLinea = "";
+  String lineaActual = "";
+  unsigned long inicio = millis();
+
+  while (cliente.connected() && (millis() - inicio) < ESPERA_CLIENTE_MS) {
+    if (!cliente.available()) {
+      continue;
+    }
+    char c = cliente.read();
+    if (c == '\n') {
+      if (primeraLinea.length() == 0) {
+        primeraLinea = lineaActual;
+      }
+      if (lineaActual.length() == 0) {
+        break;
+      }
+      lineaActual = "";
+    } else if (c != '\r' && lineaActual.length() < LARGO_MAXIMO_LINEA) {
+      lineaActual += c;
+    }
+  }
+
+  String ruta = extraerRuta(primeraLinea);
+  Serial.print("Peticion: ");
+  Serial.println(primeraLinea);
+  if (ruta == "/") {
+    enviarPagina(cliente);
+  } else if (ruta == "/abrir") {
+    // Solo se abre si la barrera esta cerrada y esperando.
+    if (estado == ESTADO_REPOSO) {
+      abrirBarrera(ESTADO_ABIERTA_REMOTA);
+    }
+    enviarRedireccion(cliente);
+  } else {
+    enviarNoEncontrada(cliente);
+  }
+
+  delay(1);
+  cliente.stop();
+}
+
+// ============================================================================
+// 8. SETUP
+// ============================================================================
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(PIN_SENSOR_IR, INPUT);
+  pinMode(PIN_TRIG, OUTPUT);
+  pinMode(PIN_ECHO, INPUT);
+  pinMode(PIN_VERDE, OUTPUT);
+  pinMode(PIN_AMARILLO, OUTPUT);
+  pinMode(PIN_ROJO, OUTPUT);
+  digitalWrite(PIN_TRIG, LOW);
+
+  // Semaforo en rojo mientras se prepara todo.
+  digitalWrite(PIN_ROJO, HIGH);
+
+  // Servo: se inicia en la posicion cerrada.
+  barrera.attach(PIN_SERVO);
+  barrera.write(POSICION_CERRADA);
+
+  // Pantalla LCD.
+  if (lcd.begin(16, 2) == 0) {
+    lcdDisponible = true;
+    lcd.backlight();
+    lcd.clear();
+  }
+
+  delay(1500);
+
+  Serial.println("PARQUEO INTELIGENTE CON BARRERA - ARDUINO UNO R4 WIFI");
+  Serial.println("-----------------------------------------------------");
+  if (!lcdDisponible) {
+    Serial.println("Aviso: no se encontro la pantalla LCD. Revise SDA y SCL.");
+  }
+  escribirFila(0, "Parqueo UAM");
+  escribirFila(1, "Calibrando...");
+
+  // Aprende el nivel del infrarrojo SIN objeto.
+  for (int segundos = 3; segundos > 0; segundos--) {
+    Serial.print("Mantenga libre el sensor infrarrojo. Inicio en ");
+    Serial.print(segundos);
+    Serial.println(" segundos.");
+    delay(1000);
+  }
+  int cantidadDeUnos = 0;
+  for (int muestra = 0; muestra < MUESTRAS_INICIALES; muestra++) {
+    cantidadDeUnos += digitalRead(PIN_SENSOR_IR);
+    delay(10);
+  }
+  estadoIrLibre = (cantidadDeUnos >= MUESTRAS_INICIALES / 2) ? HIGH : LOW;
+  Serial.print("Estado del infrarrojo SIN objeto: ");
+  Serial.println(estadoIrLibre);
+  Serial.print("Capacidad del parqueo: ");
+  Serial.println(CAPACIDAD);
+
+  escribirFila(1, "Conectando WiFi");
+  if (WiFi.status() == WL_NO_MODULE) {
+    Serial.println("No se detecta el modulo WiFi: el parqueo funciona sin pagina web.");
+  } else {
+    String version = WiFi.firmwareVersion();
+    Serial.print("Firmware del modulo WiFi: ");
+    Serial.println(version);
+    if (version < WIFI_FIRMWARE_LATEST_VERSION) {
+      Serial.println("Aviso: hay un firmware mas nuevo (Herramientas > Firmware Updater).");
+    }
+    if (conectarWifi()) {
+      servidor.begin();
+      imprimirDatosRed();
+    }
+  }
+
+  registrarEvento("Parqueo listo");
+  ultimaRevisionRed = millis();
+}
+
+// ============================================================================
+// 9. LOOP
+// ============================================================================
+
+void loop() {
+  unsigned long ahora = millis();
+
+  // Sensores, barrera y servo.
+  leerSensores();
+  if (estado == ESTADO_REPOSO) {
+    atenderReposo();
+  } else {
+    atenderApertura();
+  }
+  irAnterior = irObjeto;
+  moverServo();
+
+  // Semaforo y pantalla.
+  actualizarSemaforo();
+  actualizarPantalla();
+
+  // Resumen cada 5 s.
+  if (ahora - ultimoResumen >= INTERVALO_RESUMEN_MS) {
+    ultimoResumen = ahora;
+    imprimirResumen();
+  }
+
+  // Reconexion WiFi: solo con la barrera en reposo y los sensores libres,
+  // porque reconectar bloquea la placa varios segundos.
+  if (ahora - ultimaRevisionRed >= INTERVALO_REVISION_RED_MS) {
+    ultimaRevisionRed = ahora;
+    if (estado == ESTADO_REPOSO && !irObjeto && !usObjeto &&
+        WiFi.status() != WL_CONNECTED && WiFi.status() != WL_NO_MODULE) {
+      Serial.println("Sin conexion a la red. Reintentando...");
+      if (conectarWifi()) {
+        servidor.begin();
+        imprimirDatosRed();
+      }
+    }
+  }
+
+  // Cliente web.
+  WiFiClient cliente = servidor.available();
+  if (cliente) {
+    atenderCliente(cliente);
+  }
+}
